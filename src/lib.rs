@@ -54,6 +54,7 @@ use gloo_console::log;
 
 #[cfg(test)]
 pub mod tests;
+pub mod health_manager;
 
 /// HTTP client errors
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -180,6 +181,8 @@ pub struct RequestConfig {
     pub call_name: Option<String>,
     pub retry_count: u32,
     pub retry_delay_ms: u32,
+    /// When true, skips triggering health checks on failure (used by health check requests themselves)
+    pub skip_health_check: bool,
 }
 
 impl Default for RequestConfig {
@@ -196,6 +199,7 @@ impl Default for RequestConfig {
             call_name: None,
             retry_count: 0,
             retry_delay_ms: 1000,
+            skip_health_check: false,
         }
     }
 }
@@ -309,6 +313,12 @@ impl RequestBuilder {
         self
     }
     
+    /// Skip triggering health checks on failure (used internally by health check requests)
+    pub fn skip_health_check(mut self) -> Self {
+        self.config.skip_health_check = true;
+        self
+    }
+    
     /// Send the request
     pub async fn send(self) -> Result<HttpResponse, HttpError> {
         let mut last_error = None;
@@ -341,7 +351,17 @@ impl RequestBuilder {
             }
         }
         
-        Err(last_error.unwrap_or(HttpError::Network { message: "Unknown error".to_string() }))
+        // All retries exhausted — check if we should trigger health monitoring
+        let final_error = last_error.clone().unwrap_or(HttpError::Network { message: "Unknown error".to_string() });
+        
+        if !self.config.skip_health_check && health_manager::is_health_check_trigger_error(&final_error) {
+            if let Some(ref dispatch) = self.dispatch {
+                log!("Health Manager: Triggering health check after all retries failed");
+                health_manager::start_health_check(dispatch);
+            }
+        }
+        
+        Err(final_error)
     }
     
     async fn execute_request(&self) -> Result<HttpResponse, HttpError> {
