@@ -197,7 +197,7 @@ impl Default for RequestConfig {
             with_progress: false,
             with_notifications: false,
             call_name: None,
-            retry_count: 0,
+            retry_count: 3,
             retry_delay_ms: 1000,
             skip_health_check: false,
         }
